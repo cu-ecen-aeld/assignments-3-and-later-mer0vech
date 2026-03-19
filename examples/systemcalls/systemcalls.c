@@ -16,8 +16,13 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+    int status;
 
-    return true;
+    status = system(cmd);
+
+    if(status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0) return true;
+
+    return false;
 }
 
 /**
@@ -58,8 +63,24 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
-
     va_end(args);
+    
+    int status;
+    pid_t pid;
+
+    pid = fork();
+
+    if(pid == -1) 
+        return false;
+    else if(pid == 0) {
+        execv(command[0], command);
+        DIE("execv");
+    }
+    
+    if(waitpid(pid, &status, 0) == -1)
+        return false;
+    if(!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        return false;
 
     return true;
 }
@@ -94,6 +115,33 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 */
 
     va_end(args);
+
+    int status;
+    pid_t pid;
+    int fd;
+
+    fd = open(outputfile, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+    if(fd == -1) {
+        return false;
+    }
+    
+    pid = fork();
+    if(pid == -1)
+        return false;
+    else if(pid == 0) {
+        if(dup2(fd, STDOUT_FILENO) == -1) 
+            DIE("dup2");
+        close(fd);
+        execvp(command[0], command);
+        DIE("execvp");
+    }
+
+    close(fd);
+
+    if(waitpid(pid, &status, 0) == -1)
+        return false;
+    if(!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        return false;
 
     return true;
 }
