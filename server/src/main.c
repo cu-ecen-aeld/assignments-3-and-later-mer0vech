@@ -3,11 +3,14 @@
 #include <syslog.h>
 
 #include "server_utils.h"
+#include "config_manager.h"
+#include "thread_pool.h"
+#include "file_manager.h"
 
 int main(int argc, char *argv[])
 {
-  remove("/var/tmp/aesdsocketdata");
-
+  load_config("server.conf");
+  remove(server_cfg.log_file);
   int do_daemon = 0;
 
   // Process arguments
@@ -37,11 +40,42 @@ int main(int argc, char *argv[])
   openlog("aesdsocket", LOG_PID, LOG_DAEMON);
   syslog(LOG_INFO, "Running server...");
 
+  // Setup sighadlers
+  if(setup_signal_handlers() != 0) {
+    syslog(LOG_ERR, "Unable to setup sighandlers");
+    return 1;
+  }
+
+  // Init thread-pool
+  init_thread_pool(server_cfg.max_threads);
+
+  // Socket setup
+  int sock_fd = listen_on_port(server_cfg.port);
+  if(sock_fd == -1) {
+    syslog(LOG_ERR, "server cannot connect on port %s", server_cfg.port);
+    thread_pool_cleanup();
+    return 1;
+  }
+
+  // Set up timestamp
+  pthread_t timestamp_tid;
+  if(pthread_create(&timestamp_tid, NULL, timestamp_worker, NULL) != 0) {
+    syslog(LOG_ERR, "unable to run timestamp thread");
+    return 1;
+  } else {
+    syslog(LOG_INFO, "timestamp running every 10 seconds");
+  }
+
   // Run main logic
-  int status = run_server();
+  int status = run_server(sock_fd);
 
   // Clean and exit
+  keep_running = 0;
   syslog(LOG_INFO, "shutting down with status %d", status);
+  
+  thread_pool_cleanup();
+  pthread_join(timestamp_tid, NULL);
+  close(sock_fd);
   closelog();
 
   return status;

@@ -6,24 +6,36 @@
 #include <sys/wait.h>
 #include <sys/syslog.h>
 #include <sys/stat.h>
+#include <sys/queue.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <syslog.h>
+#include <signal.h>
+#include <stdbool.h>
+#include <pthread.h>
+#include <time.h>
 
+#include "thread_pool.h"
+#include "config_manager.h"
 #include "server_utils.h"
 #include "file_manager.h"
+#include "common.h"
 
 #define START_BUFFER_SIZE 1024
 #define MAX_RAM_PER_CLIENT (10 * 1024 * 1024)
+
 
 // --- GLOBALS --- 
 
 volatile sig_atomic_t keep_running = 1;
 volatile sig_atomic_t last_sig = 0;
 
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 // --- NET FUNCTIONS ---
 
-int listen_on_port(const char *port)
+int 
+listen_on_port(const char *port)
 {
   int sockfd;
   struct addrinfo hints, *servinfo, *p;
@@ -72,7 +84,8 @@ int listen_on_port(const char *port)
 
 }
 
-void *get_in_addr(struct sockaddr *sa)
+void*
+get_in_addr(struct sockaddr *sa)
 {
   if(sa->sa_family == AF_INET) {
     return &(((struct sockaddr_in *)sa)->sin_addr);
@@ -81,19 +94,22 @@ void *get_in_addr(struct sockaddr *sa)
   return &(((struct sockaddr_in6 *)sa)->sin6_addr);
 }
 
-void handle_client(int client_fd)
+void 
+handle_client(int client_fd)
 {
   size_t buffer_size = START_BUFFER_SIZE;
-  char *buffer = malloc(buffer_size);
-  if(buffer == NULL) {
-    syslog(LOG_ERR, "Malloc error for client %d", client_fd);
-    close(client_fd);
-    return;
-  }
+  char *buffer = safe_malloc(buffer_size);
 
   size_t pos = 0;
   char temp_char;
   ssize_t n;
+
+  struct timeval timeout;
+  timeout.tv_sec = 30;
+  timeout.tv_usec = 0;
+
+  setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
   syslog(LOG_INFO, "Client %d connected", client_fd);
 
@@ -101,21 +117,19 @@ void handle_client(int client_fd)
     if(temp_char == '\n') {
       buffer[pos] = '\0';
       if(pos > 0) {
+        pthread_mutex_lock(&file_mutex);
         append_line_to_file(buffer);
         syslog(LOG_INFO, "line appended to file");
+        size_t content_size = 0;
+        char *file_content = read_file_to_buffer(&content_size);
+        if (file_content != NULL) {
+          send(client_fd, file_content, content_size, 0);
+          free(file_content);
+        }
+        pthread_mutex_unlock(&file_mutex);
       }
-      size_t file_size = 0;
-      char *file_data = read_file_to_buffer(&file_size);
-      if(file_data) {
-        send(client_fd, file_data, file_size, 0);
-        free(file_data);
-        syslog(LOG_INFO, "sent %zu bytes to client %d", file_size, client_fd);
-      } else {
-        syslog(LOG_INFO, "file empty");
-      }
-
+      
       pos = 0;
-      break;
 
     } else {
       if(pos + 2 >= buffer_size) {
@@ -124,23 +138,28 @@ void handle_client(int client_fd)
           break;
         }
         buffer_size *= 2;
-        char *new_buffer = realloc(buffer, buffer_size);
-        if(new_buffer == NULL) {
-          syslog(LOG_ERR, "Realloc failed");
-          break;
-        }
-        buffer = new_buffer;
+        buffer = safe_realloc(buffer, buffer_size);
       }
       if(temp_char != '\r') {
         buffer[pos++] = temp_char;
       }
     }
-
-    if(n < 0) {
-      syslog(LOG_ERR, "Error reading socket for client %d", client_fd);
+  }
+	
+  if (pos > 0) {
+    buffer[pos] = '\0'; 
+    pthread_mutex_lock(&file_mutex);
+    append_line_to_file(buffer);
+    pthread_mutex_unlock(&file_mutex);
+    syslog(LOG_INFO, "Final partial line appended before closing");
+  }
+  
+  if(n < 0) {
+    if(errno == EAGAIN || errno == EWOULDBLOCK) {
+      syslog(LOG_WARNING, "Client %d timed-out", client_fd);
+    } else {
+      syslog(LOG_ERR, "Client %d socket error: %m", client_fd);
     }
-    
-
   }
 
   free(buffer);
@@ -151,7 +170,8 @@ void handle_client(int client_fd)
 
 // --- SYS FUNCTIONS ---
 
-int daemonize()
+int 
+daemonize()
 {
   pid_t pid;
 
@@ -185,20 +205,15 @@ int daemonize()
   return 0;
 }
 
-int setup_signal_handlers()
+int 
+setup_signal_handlers()
 {
   struct sigaction sa;
 
-  sa.sa_handler = sigchld_handler;
+  sa.sa_handler = stop_handler;
   sigemptyset(&sa.sa_mask);
-  sa.sa_flags = SA_RESTART;
-  if(sigaction(SIGCHLD, &sa, NULL) == -1) {
-    syslog(LOG_ERR, "sigchld error: %m");
-    return -1;
-  }
-
-  sa.sa_handler = sigterm_handler;
   sa.sa_flags = 0;
+
   if(sigaction(SIGTERM, &sa, NULL) == -1) {
     syslog(LOG_ERR, "sigterm error: %m");
     return -1;
@@ -209,22 +224,12 @@ int setup_signal_handlers()
     return -1;
   }
 
+  signal(SIGPIPE, SIG_IGN);
   return 0;
 }
 
-void sigchld_handler(int s)
-{
-  (void)s; // Variable warning gag
-
-  // Save errno in case of overwrite
-  int saved_errno = errno;
-
-  while(waitpid(-1, NULL, WNOHANG) > 0);
-
-  errno = saved_errno;
-}
-
-void sigterm_handler(int s)
+void 
+stop_handler(int s)
 {
   last_sig = s;
 
@@ -233,20 +238,10 @@ void sigterm_handler(int s)
 
 // --- MAIN LOGIC ---
 
-int run_server()
+int 
+run_server(int sock_fd)
 {
-  // Socket/Bind/Listen init
-  int sockfd;
-  sockfd = listen_on_port(PORT);
-  if(sockfd == -1) return 1;
-
-  // Sig setup
-  if(setup_signal_handlers() == -1) {
-    close(sockfd);
-    return 1;
-  }
-
-  syslog(LOG_INFO, "Waiting for connections on port %s", PORT);
+  syslog(LOG_INFO, "Waiting for connections on port %s", server_cfg.port);
 
   // Main loop
   struct sockaddr_storage their_addr; // Address info of connectee
@@ -258,7 +253,7 @@ int run_server()
     sin_size = sizeof their_addr;
 
     // Get new connection
-    new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+    new_fd = accept(sock_fd, (struct sockaddr *)&their_addr, &sin_size);
     if(new_fd == -1) {
       if(errno == EINTR) continue;
       syslog(LOG_ERR, "Accept error: %m");
@@ -269,29 +264,10 @@ int run_server()
     inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr), s, sizeof s);
     syslog(LOG_INFO, "Accepted connection from %s", s);
 
-    pid_t pid = fork();
-
-    if(pid < 0) {
-      syslog(LOG_ERR, "Fork error: %m");
-      close(new_fd);
-      continue;
-    }
-    if(pid == 0) {
-      close(sockfd);
-      handle_client(new_fd);
-      exit(0);
-    }
-
-    close(new_fd);
+    thread_pool_enqueue(new_fd);
   }
 
-  // Cleanup and exit
-  if(last_sig == SIGINT || last_sig == SIGTERM) {
-    syslog(LOG_INFO, "Caught signal, exiting");
-  } else if (keep_running == 0) {
-    syslog(LOG_INFO, "exiting normally");
-  }
-  close(sockfd);
+  syslog(LOG_INFO, "Server exiting...");
 
   return 0;
 }

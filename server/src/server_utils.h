@@ -5,7 +5,6 @@
 #include <sys/socket.h>
 #include <netdb.h>
 
-#define PORT "9000"
 #define BACKLOG 10
 
 
@@ -13,6 +12,7 @@
 
 extern volatile sig_atomic_t keep_running;
 extern volatile sig_atomic_t last_sig;
+extern pthread_mutex_t file_mutex;
 
 // --- NET FUNCTIONS ---
 
@@ -46,8 +46,7 @@ int daemonize();
 * Signal handlers
 */
 int setup_signal_handlers();
-void sigchld_handler(int s);
-void sigterm_handler(int s);
+void stop_handler(int s);
 
 // --- MAIN LOGIC ---
 
