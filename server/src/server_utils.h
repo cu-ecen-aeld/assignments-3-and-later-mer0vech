@@ -13,6 +13,11 @@
 extern volatile sig_atomic_t keep_running;
 extern volatile sig_atomic_t last_sig;
 extern pthread_mutex_t file_mutex;
+extern int global_log_fd;
+
+// --- FILE HANDLERS ---
+int init_log_file(const char *path);
+void close_log_file(void);
 
 // --- NET FUNCTIONS ---
 

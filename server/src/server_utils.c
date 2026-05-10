@@ -31,6 +31,29 @@ volatile sig_atomic_t keep_running = 1;
 volatile sig_atomic_t last_sig = 0;
 
 pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+int global_log_fd = -1;
+
+// --- FILE HANDLERS ---
+int 
+init_log_file(const char *path)
+{
+  global_log_fd = open(path, O_RDWR | O_APPEND | O_CREAT, 0644);
+  if(global_log_fd == -1) {
+    syslog(LOG_ERR, "unable to open log file (%s) for r/w operation: %m", path);
+    return 1;
+  }
+  return 0;
+}
+
+void 
+close_log_file(void)
+{
+  if(global_log_fd != -1) {
+    close(global_log_fd);
+    global_log_fd = -1;
+    syslog(LOG_INFO, "log file closed successfully");
+  }
+}
 
 // --- NET FUNCTIONS ---
 
@@ -117,16 +140,17 @@ handle_client(int client_fd)
     if(temp_char == '\n') {
       buffer[pos] = '\0';
       if(pos > 0) {
+        char *file_content = NULL;
+        size_t content_size = 0;
         pthread_mutex_lock(&file_mutex);
         append_line_to_file(buffer);
         syslog(LOG_INFO, "line appended to file");
-        size_t content_size = 0;
-        char *file_content = read_file_to_buffer(&content_size);
+        file_content = read_file_to_buffer(&content_size);
+        pthread_mutex_unlock(&file_mutex);
         if (file_content != NULL) {
           send(client_fd, file_content, content_size, 0);
           free(file_content);
         }
-        pthread_mutex_unlock(&file_mutex);
       }
       
       pos = 0;
@@ -241,6 +265,8 @@ stop_handler(int s)
 int 
 run_server(int sock_fd)
 {
+  if(init_log_file(server_cfg.log_file) != 0) return 1;
+
   syslog(LOG_INFO, "Waiting for connections on port %s", server_cfg.port);
 
   // Main loop
@@ -268,6 +294,7 @@ run_server(int sock_fd)
   }
 
   syslog(LOG_INFO, "Server exiting...");
+  close_log_file();
 
   return 0;
 }
