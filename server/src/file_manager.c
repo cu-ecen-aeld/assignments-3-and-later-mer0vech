@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <pthread.h>
+#include <stdio.h>
 
 #include "file_manager.h"
 #include "config_manager.h"
@@ -49,14 +50,18 @@ append_line_to_file(const char *data)
     return;
   }
 
-  if(write(global_log_fd, data, strlen(data)) < 0) {
+  char *out;
+  if(asprintf(&out, "%s\n", data) == -1) {
+    syslog(LOG_ERR, "error parsing write string");
+    return;
+  }
+
+  if(write(global_log_fd, out, strlen(out)) < 0) {
     syslog(LOG_ERR, "error writing to file");
   }
   
-  if(write(global_log_fd, "\n", 1) < 0) {
-    syslog(LOG_ERR, "error writing to file");
-  }
-
+  fsync(global_log_fd);
+  free(out);
 }
 
 char*
@@ -67,18 +72,17 @@ read_file_to_buffer(size_t *out_size)
     return NULL;
   }
 
-  struct stat st;
-  if(fstat(global_log_fd, &st) == -1) {
-    syslog(LOG_ERR, "Failed to stat %s", server_cfg.log_file);
+  off_t current_pos = lseek(global_log_fd, 0, SEEK_END);
+  if(current_pos <= 0) {
+    *out_size = 0;
     return NULL;
   }
-  
-  syslog(LOG_INFO, "fstat: %ld bytes", st.st_size);
 
-  *out_size = st.st_size;
+  *out_size = (size_t)current_pos;
   char *content = safe_calloc(1, *out_size + 1);
 
   ssize_t bytes_read = pread(global_log_fd, content, *out_size, 0);
+
   if(bytes_read != (ssize_t)*out_size) {
     syslog(LOG_ERR, "File read error (expected %zu bytes, got %zd bytes)", *out_size, bytes_read);
     free(content);
