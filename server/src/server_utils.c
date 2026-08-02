@@ -226,15 +226,27 @@ daemonize()
     return -1;
   }
 
-  // No need for std file descriptors
-  close(STDIN_FILENO);
-  close(STDOUT_FILENO);
-  close(STDERR_FILENO);
+  int fd = open("/dev/null", O_RDWR);
+  if (fd != -1) {
+    // dup2 prisilno i bezbedno preusmerava standardne deskriptore
+    dup2(fd, STDIN_FILENO);
+    dup2(fd, STDOUT_FILENO);
+    dup2(fd, STDERR_FILENO);
+    
+    // Zatvaramo originalni fd jer nam više ne treba nakon dup2 preslikavanja
+    if (fd > 2) {
+      close(fd);
+    }
+  }
+  // // No need for std file descriptors
+  // close(STDIN_FILENO);
+  // close(STDOUT_FILENO);
+  // close(STDERR_FILENO);
 
-  // Open /dev/null for std
-  open("/dev/null", O_RDONLY); 
-  open("/dev/null", O_WRONLY); 
-  open("/dev/null", O_WRONLY); 
+  // // Open /dev/null for std
+  // open("/dev/null", O_RDONLY); 
+  // open("/dev/null", O_WRONLY); 
+  // open("/dev/null", O_WRONLY); 
 
   return 0;
 }
