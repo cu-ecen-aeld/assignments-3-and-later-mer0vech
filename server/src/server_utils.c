@@ -31,28 +31,38 @@ volatile sig_atomic_t keep_running = 1;
 volatile sig_atomic_t last_sig = 0;
 
 pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+#ifndef USE_AESD_CHAR_DEVICE
 int global_log_fd = -1;
+#endif
 
 // --- FILE HANDLERS ---
 int 
 init_log_file(const char *path)
 {
+  #ifndef USE_AESD_CHAR_DEVICE
   global_log_fd = open(path, O_RDWR | O_APPEND | O_CREAT, 0644);
   if(global_log_fd == -1) {
     syslog(LOG_ERR, "unable to open log file (%s) for r/w operation: %m", path);
     return 1;
   }
+  #else
+  (void)path;
+  #endif
+
   return 0;
 }
 
 void 
 close_log_file(void)
 {
+  #ifndef USE_AESD_CHAR_DEVICE
   if(global_log_fd != -1) {
     close(global_log_fd);
     global_log_fd = -1;
     syslog(LOG_INFO, "log file closed successfully");
   }
+  #endif
 }
 
 // --- NET FUNCTIONS ---
@@ -137,36 +147,36 @@ handle_client(int client_fd)
   syslog(LOG_INFO, "Client %d connected", client_fd);
 
   while((n = recv(client_fd, &temp_char, 1, 0)) > 0) {
+    if(pos + 2 >= buffer_size) {
+      if(buffer_size * 2 > MAX_RAM_PER_CLIENT) {
+        syslog(LOG_WARNING, "RAM limit for client %d exceeded", client_fd);
+        break;
+      }
+      buffer_size *= 2;
+      buffer = safe_realloc(buffer, buffer_size);
+    }
+
+    if(temp_char != '\r') {
+      buffer[pos++] = temp_char;
+    }
+
     if(temp_char == '\n') {
       buffer[pos] = '\0';
-      if(pos > 0) {
-        char *file_content = NULL;
-        size_t content_size = 0;
-        pthread_mutex_lock(&file_mutex);
-        append_line_to_file(buffer);
-        syslog(LOG_INFO, "line appended to file");
-        file_content = read_file_to_buffer(&content_size);
-        pthread_mutex_unlock(&file_mutex);
-        if (file_content != NULL) {
-          send(client_fd, file_content, content_size, 0);
-          free(file_content);
-        }
+
+      char *file_content = NULL;
+      size_t content_size = 0;
+
+      pthread_mutex_lock(&file_mutex);
+      append_line_to_file(buffer);
+      syslog(LOG_INFO, "line appended to file");
+      file_content = read_file_to_buffer(&content_size);
+      pthread_mutex_unlock(&file_mutex);
+      if (file_content != NULL) {
+        send(client_fd, file_content, content_size, 0);
+        free(file_content);
       }
       
       pos = 0;
-
-    } else {
-      if(pos + 2 >= buffer_size) {
-        if(buffer_size * 2 > MAX_RAM_PER_CLIENT) {
-          syslog(LOG_WARNING, "RAM limit for client %d exceeded", client_fd);
-          break;
-        }
-        buffer_size *= 2;
-        buffer = safe_realloc(buffer, buffer_size);
-      }
-      if(temp_char != '\r') {
-        buffer[pos++] = temp_char;
-      }
     }
   }
 	

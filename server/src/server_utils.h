@@ -13,7 +13,10 @@
 extern volatile sig_atomic_t keep_running;
 extern volatile sig_atomic_t last_sig;
 extern pthread_mutex_t file_mutex;
+
+#ifndef USE_AESD_CHAR_DEVICE
 extern int global_log_fd;
+#endif
 
 // --- FILE HANDLERS ---
 int init_log_file(const char *path);

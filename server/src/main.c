@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <syslog.h>
+#include <pthread.h>
 
 #include "server_utils.h"
 #include "config_manager.h"
@@ -10,7 +11,11 @@
 int main(int argc, char *argv[])
 {
   load_config("server.conf");
+
+  #ifndef USE_AESD_CHAR_DEVICE
   remove(server_cfg.log_file);
+  #endif
+
   int do_daemon = 0;
 
   // Process arguments
@@ -57,6 +62,7 @@ int main(int argc, char *argv[])
     return 1;
   }
 
+  #ifndef USE_AESD_CHAR_DEVICE
   // Set up timestamp
   pthread_t timestamp_tid;
   if(pthread_create(&timestamp_tid, NULL, timestamp_worker, NULL) != 0) {
@@ -65,6 +71,7 @@ int main(int argc, char *argv[])
   } else {
     syslog(LOG_INFO, "timestamp running every 10 seconds");
   }
+  #endif
 
   // Run main logic
   int status = run_server(sock_fd);
@@ -74,7 +81,11 @@ int main(int argc, char *argv[])
   syslog(LOG_INFO, "shutting down with status %d", status);
   
   thread_pool_cleanup();
+
+  #ifndef USE_AESD_CHAR_DEVICE
   pthread_join(timestamp_tid, NULL);
+  #endif
+  
   close(sock_fd);
   closelog();
 

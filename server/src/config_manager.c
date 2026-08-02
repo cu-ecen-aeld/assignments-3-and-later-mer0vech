@@ -18,7 +18,11 @@ load_config(const char *filename)
     server_cfg.port[sizeof(server_cfg.port) - 1] = '\0';
     server_cfg.max_threads = 4;
     server_cfg.queue_size = 10;
+    #ifdef USE_AESD_CHAR_DEVICE
+    strncpy(server_cfg.log_file, "/dev/aesdchar", sizeof(server_cfg.log_file) - 1);
+    #else
     strncpy(server_cfg.log_file, "/var/tmp/aesdsocketdata", sizeof(server_cfg.log_file) - 1);
+    #endif
     server_cfg.log_file[sizeof(server_cfg.log_file) - 1] = '\0';
     return;
   }
@@ -30,27 +34,39 @@ load_config(const char *filename)
     char key[64], value[256];
 
     if(sscanf(line, " %63[^=] = %255[^\n\r]", key, value) == 2) {
-      strncpy(server_cfg.port, value, sizeof(server_cfg.port) - 1);
-      server_cfg.port[sizeof(server_cfg.port) - 1] = '\0';
-    } else if(strcmp(key, "MAX_THREADS") == 0) {
-      int val = atoi(value);
-      if(val > 0 && val <= 100) {
-        server_cfg.max_threads = val;
-      } else {
-        syslog(LOG_WARNING, "Invalid MAX_THREADS given (%d), using default (4)", val);
-        server_cfg.max_threads = 4;
+      char *end = key + strlen(key) - 1;
+      while(end > key && (*end == ' ' || *end == '\t')) {
+        *end = '\0';
+        end--;
       }
-    } else if(strcmp(key, "QUEUE_SIZE") == 0) {
-      int val = atoi(value);
-      if(val > 0 && val <= 1000) {
-        server_cfg.queue_size = val;
-      } else {
-        syslog(LOG_WARNING, "Invalid QUEUE_SIZE given (%d), using default (10)", val);
-        server_cfg.queue_size = 10;
+
+      if(strcmp(key, "PORT") == 0) {
+        strncpy(server_cfg.port, value, sizeof(server_cfg.port) - 1);
+        server_cfg.port[sizeof(server_cfg.port) - 1] = '\0';
+      } else if(strcmp(key, "MAX_THREADS") == 0) {
+        int val = atoi(value);
+        if(val > 0 && val <= 100) {
+          server_cfg.max_threads = val;
+        } else {
+          syslog(LOG_WARNING, "Invalid MAX_THREADS given (%d), using default (4)", val);
+          server_cfg.max_threads = 4;
+        }
+      } else if(strcmp(key, "QUEUE_SIZE") == 0) {
+        int val = atoi(value);
+        if(val > 0 && val <= 1000) {
+          server_cfg.queue_size = val;
+        } else {
+          syslog(LOG_WARNING, "Invalid QUEUE_SIZE given (%d), using default (10)", val);
+          server_cfg.queue_size = 10;
+        }
+      } else if(strcmp(key, "LOG_FILE") == 0) {
+        #ifdef USE_AESD_CHAR_DEVICE
+        strncpy(server_cfg.log_file, "/dev/aesdchar", sizeof(server_cfg.log_file) - 1);
+        #else
+        strncpy(server_cfg.log_file, value, sizeof(server_cfg.log_file) - 1);
+        #endif
+        server_cfg.log_file[sizeof(server_cfg.log_file) - 1] = '\0';
       }
-    } else if(strcmp(key, "LOG_FILE") == 0) {
-      strncpy(server_cfg.log_file, value, sizeof(server_cfg.log_file) - 1);
-      server_cfg.log_file[sizeof(server_cfg.log_file) - 1] = '\0';
     }
   }
 

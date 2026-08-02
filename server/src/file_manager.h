@@ -15,7 +15,9 @@ void append_line_to_file(const char *data);
 */
 char *read_file_to_buffer(size_t *out_size);
 
+#ifndef USE_AESD_CHAR_DEVICE
 /*
 * Writes a timestamp to file at specified interval
 */
 void *timestamp_worker(void *arg);
+#endif

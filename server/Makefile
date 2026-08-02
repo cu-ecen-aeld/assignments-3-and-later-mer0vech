@@ -5,8 +5,14 @@ CROSS_COMPILE ?=
 
 CC = $(CROSS_COMPILE)gcc
 
+USE_AESD_CHAR_DEVICE ?= 1
+
 CFLAGS = -Wall -Wextra -pthread -g -O2
 LDFLAGS = -pthread
+
+ifeq ($(USE_AESD_CHAR_DEVICE), 1)
+	CFLAGS += -DUSE_AESD_CHAR_DEVICE=1
+endif
 
 SRC_DIR = src
 OBJ_DIR = build
