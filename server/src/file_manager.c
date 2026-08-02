@@ -176,7 +176,7 @@ read_file_to_buffer(size_t *out_size)
     return;
   }
 
-  off_t current_pos = lseek(fd, 0, SEEK_END);
+  off_t current_pos = lseek(global_log_fd, 0, SEEK_END);
   if(current_pos <= 0) {
     *out_size = 0;
     return NULL;
