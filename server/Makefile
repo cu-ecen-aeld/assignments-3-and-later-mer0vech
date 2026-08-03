@@ -3,12 +3,12 @@ TARGET = aesdsocket
 # CROSS_COMPILE ?= aarch64-none-linux-gnu-
 CROSS_COMPILE ?=
 
-CC = $(CROSS_COMPILE)gcc
+CC ?= $(CROSS_COMPILE)gcc
 
 USE_AESD_CHAR_DEVICE ?= 1
 
-CFLAGS = -Wall -Wextra -pthread -g -O2
-LDFLAGS = -pthread
+CFLAGS += -Wall -Wextra -pthread -g -O2
+LDFLAGS += -pthread
 
 ifeq ($(USE_AESD_CHAR_DEVICE), 1)
 	CFLAGS += -DUSE_AESD_CHAR_DEVICE=1
