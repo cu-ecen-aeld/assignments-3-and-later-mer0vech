@@ -14,12 +14,14 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include <time.h>
+#include <stdio.h>
 
 #include "thread_pool.h"
 #include "config_manager.h"
 #include "server_utils.h"
 #include "file_manager.h"
 #include "common.h"
+#include "../../aesd-char-driver/aesd_ioctl.h"
 
 #define START_BUFFER_SIZE 1024
 #define MAX_RAM_PER_CLIENT (10 * 1024 * 1024)
@@ -35,6 +37,53 @@ pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 #ifndef USE_AESD_CHAR_DEVICE
 int global_log_fd = -1;
 #endif
+
+static
+char*
+exec_driver_ioctl(uint32_t cmd, uint32_t offset, size_t *out_size)
+{
+  struct aesd_seekto seek_data = { .write_cmd = cmd, .write_cmd_offset = offset };
+  size_t max_capacity = 64 * 1024;
+  char *content = safe_malloc(max_capacity);
+  size_t total_bytes_read = 0;
+
+  int drv_fd = open(server_cfg.log_file, O_RDWR);
+  if(drv_fd < 0) {
+    syslog(LOG_ERR, "Unable to open config file :%m");
+    free(content);
+    return NULL;
+  }
+
+  if(ioctl(drv_fd, AESDCHAR_IOCSEEKTO, &seek_data) == 0) {
+    syslog(LOG_INFO, "IOCTL seekto successful, reading...");
+    
+    ssize_t bytes_read;
+    while ((bytes_read = read(drv_fd, content + total_bytes_read, max_capacity - total_bytes_read - 1)) > 0) {
+      total_bytes_read += bytes_read;
+      if (total_bytes_read >= max_capacity - 1) {
+        break;
+      }
+    }
+
+    if (total_bytes_read > 0) {
+      content[total_bytes_read] = '\0';
+      *out_size = total_bytes_read;
+    } else {
+      syslog(LOG_WARNING, "Driver returned 0 bytes after IOCTL!");
+      free(content);
+      content = NULL;
+      *out_size = 0;
+    }
+  } else {
+    syslog(LOG_ERR, "IOCTL command failed :%m");
+    free(content);
+    content = NULL;
+  }
+
+  close(drv_fd);
+  return content;
+}
+
 
 // --- FILE HANDLERS ---
 int 
@@ -147,6 +196,7 @@ handle_client(int client_fd)
   syslog(LOG_INFO, "Client %d connected", client_fd);
 
   while((n = recv(client_fd, &temp_char, 1, 0)) > 0) {
+    
     if(pos + 2 >= buffer_size) {
       if(buffer_size * 2 > MAX_RAM_PER_CLIENT) {
         syslog(LOG_WARNING, "RAM limit for client %d exceeded", client_fd);
@@ -161,26 +211,41 @@ handle_client(int client_fd)
     }
 
     if(temp_char == '\n') {
-      buffer[pos] = '\0';
+      buffer[pos] = '\0'; 
 
       char *file_content = NULL;
       size_t content_size = 0;
 
-      pthread_mutex_lock(&file_mutex);
-      append_line_to_file(buffer);
-      syslog(LOG_INFO, "line appended to file");
-      file_content = read_file_to_buffer(&content_size);
-      pthread_mutex_unlock(&file_mutex);
+      if(pos >= 19 && strncmp(buffer, "AESDCHAR_IOCSEEKTO:", 19) == 0) {
+        uint32_t cmd;
+        uint32_t offset;
+
+        if(sscanf(buffer + 19, "%u,%u", &cmd, &offset) == 2) {
+          syslog(LOG_INFO, "Caught IOCTL request - CMD: %u, OFFSET: %u", cmd, offset);
+          pthread_mutex_lock(&file_mutex);
+          file_content = exec_driver_ioctl(cmd, offset, &content_size);
+          pthread_mutex_unlock(&file_mutex);
+        }
+      } else {
+        pthread_mutex_lock(&file_mutex);
+        append_line_to_file(buffer);
+        syslog(LOG_INFO, "line appended to file");
+        file_content = read_file_to_buffer(&content_size);
+        pthread_mutex_unlock(&file_mutex);
+      }
+
       if (file_content != NULL) {
         send(client_fd, file_content, content_size, 0);
         free(file_content);
+      } else {
+        send(client_fd, "", 0, 0);
       }
       
       pos = 0;
-    }
+    } 
   }
 	
-  if (pos > 0) {
+  if(pos > 0) {
     buffer[pos] = '\0'; 
     pthread_mutex_lock(&file_mutex);
     append_line_to_file(buffer);
@@ -228,25 +293,14 @@ daemonize()
 
   int fd = open("/dev/null", O_RDWR);
   if (fd != -1) {
-    // dup2 prisilno i bezbedno preusmerava standardne deskriptore
     dup2(fd, STDIN_FILENO);
     dup2(fd, STDOUT_FILENO);
     dup2(fd, STDERR_FILENO);
     
-    // Zatvaramo originalni fd jer nam više ne treba nakon dup2 preslikavanja
     if (fd > 2) {
       close(fd);
     }
   }
-  // // No need for std file descriptors
-  // close(STDIN_FILENO);
-  // close(STDOUT_FILENO);
-  // close(STDERR_FILENO);
-
-  // // Open /dev/null for std
-  // open("/dev/null", O_RDONLY); 
-  // open("/dev/null", O_WRONLY); 
-  // open("/dev/null", O_WRONLY); 
 
   return 0;
 }

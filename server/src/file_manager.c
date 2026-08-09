@@ -54,7 +54,7 @@ append_line_to_file(const char *data)
   }
 
   #ifdef USE_AESD_CHAR_DEVICE
-  int fd = open(server_cfg.log_file, O_WRONLY | O_CREAT | O_APPEND, 0666);
+  int fd = open(server_cfg.log_file, O_WRONLY | O_CREAT, 0666);
 
   if(fd < 0) {
     syslog(LOG_ERR, "log file descriptor is not initialized");
@@ -123,39 +123,26 @@ read_file_to_buffer(size_t *out_size)
     return NULL;
   }
 
-  lseek(fd, 0, SEEK_SET);
-
-  size_t capacity = 1024;
-  size_t total_read = 0 ;
+  size_t capacity = 64 * 1024; 
   char *content = safe_malloc(capacity);
-  
-  while(1) {
-    if(total_read + 1 >= capacity) {
-      capacity += 1024;
-      content = safe_realloc(content, capacity);
-    }
+  size_t total_read = 0;
+  ssize_t bytes_read;
 
-    ssize_t bytes_read = read(fd, content + total_read, 1);
-  
-    if(bytes_read < 0) {
-      syslog(LOG_ERR, "error reading from char device");
-      free(content);
-      *out_size = 0;
-      close(fd);
-      return NULL;
-    }
-
-    if(bytes_read == 0) {
-      break;
-    }
-
+  while ((bytes_read = read(fd, content + total_read, capacity - total_read - 1)) > 0) {
     total_read += bytes_read;
-    if(total_read > 64 * 1024) {
+    if (total_read >= capacity - 1) {
       break;
     }
   }
 
   close(fd);
+
+  if(bytes_read < 0) {
+    syslog(LOG_ERR, "error reading from char device :%m");
+    free(content);
+    *out_size = 0;
+    return NULL;
+  }
 
   if(total_read == 0) {
     free(content);

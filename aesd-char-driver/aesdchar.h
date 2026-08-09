@@ -38,6 +38,8 @@ struct aesd_dev
      size_t tmp_size;
      size_t tmp_capacity;
 
+     loff_t bytes_dropped;
+
      struct mutex lock;
 
      wait_queue_head_t read_queue;
